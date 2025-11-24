@@ -1,48 +1,31 @@
-//
-//  TranscriptionClient.swift
-//  Hex
-//
-//  Created by Kit Langton on 1/24/25.
-//
-
 import AVFoundation
-import Darwin
 import Dependencies
 import DependenciesMacros
 import Foundation
-import HexCore
+import Logging
 import WhisperKit
+import SherpaOnnx
+
+#if canImport(FluidAudio)
+import FluidAudio
+#endif
 
 private let transcriptionLogger = HexLog.transcription
 private let modelsLogger = HexLog.models
 private let parakeetLogger = HexLog.parakeet
 
-/// A client that downloads and loads WhisperKit models, then transcribes audio files using the loaded model.
-/// Exposes progress callbacks to report overall download-and-load percentage and transcription progress.
 @DependencyClient
-struct TranscriptionClient {
-  /// Transcribes an audio file at the specified `URL` using the named `model`.
-  /// Reports transcription progress via `progressCallback`.
-  var transcribe: @Sendable (URL, String, DecodingOptions, @escaping (Progress) -> Void) async throws -> String
-
-  /// Ensures a model is downloaded (if missing) and loaded into memory, reporting progress via `progressCallback`.
-  var downloadModel: @Sendable (String, @escaping (Progress) -> Void) async throws -> Void
-
-  /// Deletes a model from disk if it exists
-  var deleteModel: @Sendable (String) async throws -> Void
-
-  /// Checks if a named model is already downloaded on this system.
-  var isModelDownloaded: @Sendable (String) async -> Bool = { _ in false }
-
-  /// Fetches a recommended set of models for the user's hardware from Hugging Face's `argmaxinc/whisperkit-coreml`.
-  var getRecommendedModels: @Sendable () async throws -> ModelSupport
-
-  /// Lists all model variants found in `argmaxinc/whisperkit-coreml`.
-  var getAvailableModels: @Sendable () async throws -> [String]
+public struct TranscriptionClient: Sendable {
+  public var transcribe: @Sendable (URL, String, DecodingOptions, @escaping (Progress) -> Void) async throws -> String
+  public var downloadModel: @Sendable (String, @escaping (Progress) -> Void) async throws -> Void
+  public var deleteModel: @Sendable (String) async throws -> Void
+  public var isModelDownloaded: @Sendable (String) async -> Bool = { _ in false }
+  public var getRecommendedModels: @Sendable () async throws -> ModelSupport
+  public var getAvailableModels: @Sendable () async throws -> [String]
 }
 
 extension TranscriptionClient: DependencyKey {
-  static var liveValue: Self {
+  public static var liveValue: Self {
     let live = TranscriptionClientLive()
     return Self(
       transcribe: { try await live.transcribe(url: $0, model: $1, options: $2, progressCallback: $3) },
@@ -55,28 +38,21 @@ extension TranscriptionClient: DependencyKey {
   }
 }
 
-extension DependencyValues {
+public extension DependencyValues {
   var transcription: TranscriptionClient {
     get { self[TranscriptionClient.self] }
     set { self[TranscriptionClient.self] = newValue }
   }
 }
 
-/// An `actor` that manages WhisperKit models by downloading (from Hugging Face),
-//  loading them into memory, and then performing transcriptions.
-
-actor TranscriptionClientLive {
-  // MARK: - Stored Properties
-
-  /// The current in-memory `WhisperKit` instance, if any.
+public actor TranscriptionClientLive {
   private var whisperKit: WhisperKit?
-
-  /// The name of the currently loaded model, if any.
   private var currentModelName: String?
   private var parakeet: ParakeetClient = ParakeetClient()
   private var senseVoice: SenseVoiceClient = SenseVoiceClient()
 
-  /// The base folder under which we store model data (e.g., ~/Library/Application Support/...).
+  @Dependency(\.huggingFace) var huggingFace
+
   private lazy var modelsBaseFolder: URL = {
     do {
       let appSupportURL = try FileManager.default.url(
@@ -96,12 +72,9 @@ actor TranscriptionClientLive {
     }
   }()
 
-  // MARK: - Public Methods
+  public init() {}
 
-  /// Ensures the given `variant` model is downloaded and loaded, reporting
-  /// overall progress (0%–50% for downloading, 50%–100% for loading).
-  func downloadAndLoadModel(variant: String, progressCallback: @escaping (Progress) -> Void) async throws {
-    // If Parakeet, use Parakeet client path
+  public func downloadAndLoadModel(variant: String, progressCallback: @escaping (Progress) -> Void) async throws {
     if isParakeet(variant) {
       try await parakeet.ensureLoaded(modelName: variant, progress: progressCallback)
       currentModelName = variant
@@ -115,17 +88,10 @@ actor TranscriptionClientLive {
         return
     }
 
-    // Resolve wildcard patterns (e.g., "distil*large-v3") to a concrete variant
+    // Resolve wildcard patterns or use direct name
     let variant = await resolveVariant(variant)
-    // Special handling for corrupted or malformed variant names
     if variant.isEmpty {
-      throw NSError(
-        domain: "TranscriptionClient",
-        code: -3,
-        userInfo: [
-          NSLocalizedDescriptionKey: "Cannot download model: Empty model name",
-        ]
-      )
+      throw NSError(domain: "TranscriptionClient", code: -3, userInfo: [NSLocalizedDescriptionKey: "Cannot download model: Empty model name"])
     }
 
     let overallProgress = Progress(totalUnitCount: 100)
@@ -134,7 +100,6 @@ actor TranscriptionClientLive {
 
     modelsLogger.info("Preparing model download and load for \(variant)")
 
-    // 1) Model download phase (0-50% progress)
     if !(await isModelDownloaded(variant)) {
       try await downloadModelIfNeeded(variant: variant) { downloadProgress in
         let fraction = downloadProgress.fractionCompleted * 0.5
@@ -142,97 +107,66 @@ actor TranscriptionClientLive {
         progressCallback(overallProgress)
       }
     } else {
-      // Skip download phase if already downloaded
       overallProgress.completedUnitCount = 50
       progressCallback(overallProgress)
     }
 
-    // 2) Model loading phase (50-100% progress)
     try await loadWhisperKitModel(variant) { loadingProgress in
       let fraction = 0.5 + (loadingProgress.fractionCompleted * 0.5)
       overallProgress.completedUnitCount = Int64(fraction * 100)
       progressCallback(overallProgress)
     }
 
-    // Final progress update
     overallProgress.completedUnitCount = 100
     progressCallback(overallProgress)
   }
 
-  /// Deletes a model from disk if it exists
-  func deleteModel(variant: String) async throws {
+  public func deleteModel(variant: String) async throws {
     if isParakeet(variant) {
       try await parakeet.deleteCaches(modelName: variant)
       if currentModelName == variant { unloadCurrentModel() }
       return
     }
     let modelFolder = modelPath(for: variant)
-
-    // Check if the model exists
-    guard FileManager.default.fileExists(atPath: modelFolder.path) else {
-      // Model doesn't exist, nothing to delete
-      return
-    }
-
-    // If this is the currently loaded model, unload it first
-    if currentModelName == variant {
-      unloadCurrentModel()
-    }
-
-    // Delete the model directory
+    guard FileManager.default.fileExists(atPath: modelFolder.path) else { return }
+    if currentModelName == variant { unloadCurrentModel() }
     try FileManager.default.removeItem(at: modelFolder)
-
     modelsLogger.info("Deleted model \(variant)")
   }
 
-  /// Returns `true` if the model is already downloaded to the local folder.
-  /// Performs a thorough check to ensure the model files are actually present and usable.
-  func isModelDownloaded(_ modelName: String) async -> Bool {
+  public func isModelDownloaded(_ modelName: String) async -> Bool {
     if isParakeet(modelName) {
-      let available = await parakeet.isModelAvailable(modelName)
-      parakeetLogger.debug("Parakeet available? \(available)")
-      return available
+      return await parakeet.isModelAvailable(modelName)
     }
     if isSenseVoice(modelName) {
         return await senseVoice.isModelAvailable(modelPath(for: modelName).path)
     }
+
     let modelFolderPath = modelPath(for: modelName).path
     let fileManager = FileManager.default
 
-    // First, check if the basic model directory exists
-    guard fileManager.fileExists(atPath: modelFolderPath) else {
-      // Don't print logs that would spam the console
-      return false
-    }
+    guard fileManager.fileExists(atPath: modelFolderPath) else { return false }
 
     do {
-      // Check if the directory has actual model files in it
       let contents = try fileManager.contentsOfDirectory(atPath: modelFolderPath)
+      guard !contents.isEmpty else { return false }
 
-      // Model should have multiple files and certain key components
-      guard !contents.isEmpty else {
-        return false
-      }
-
-      // Check for specific model structure - need both tokenizer and model files
       let hasModelFiles = contents.contains { $0.hasSuffix(".mlmodelc") || $0.contains("model") }
-      let tokenizerFolderPath = tokenizerPath(for: modelName).path
-      let hasTokenizer = fileManager.fileExists(atPath: tokenizerFolderPath)
 
-      // Both conditions must be true for a model to be considered downloaded
+      let tPath = tokenizerPath(for: modelName)
+      let hasTokenizer = fileManager.fileExists(atPath: tPath.appendingPathComponent("tokenizer.json").path)
+
       return hasModelFiles && hasTokenizer
     } catch {
       return false
     }
   }
 
-  /// Returns a list of recommended models based on current device hardware.
-  func getRecommendedModels() async -> ModelSupport {
+  public func getRecommendedModels() async -> ModelSupport {
     await WhisperKit.recommendedRemoteModels()
   }
 
-  /// Lists all model variants available in the `argmaxinc/whisperkit-coreml` repository.
-  func getAvailableModels() async throws -> [String] {
+  public func getAvailableModels() async throws -> [String] {
     var names = try await WhisperKit.fetchAvailableModels()
     #if canImport(FluidAudio)
     for model in ParakeetModel.allCases.reversed() {
@@ -242,22 +176,12 @@ actor TranscriptionClientLive {
     return names
   }
 
-  /// Transcribes the audio file at `url` using a `model` name.
-  /// If the model is not yet loaded (or if it differs from the current model), it is downloaded and loaded first.
-  /// Transcription progress can be monitored via `progressCallback`.
-  func transcribe(
-    url: URL,
-    model: String,
-    options: DecodingOptions,
-    progressCallback: @escaping (Progress) -> Void
-  ) async throws -> String {
+  public func transcribe(url: URL, model: String, options: DecodingOptions, progressCallback: @escaping (Progress) -> Void) async throws -> String {
     let startAll = Date()
     if isParakeet(model) {
       transcriptionLogger.notice("Transcribing with Parakeet model=\(model) file=\(url.lastPathComponent)")
       let startLoad = Date()
-      try await downloadAndLoadModel(variant: model) { p in
-        progressCallback(p)
-      }
+      try await downloadAndLoadModel(variant: model) { p in progressCallback(p) }
       transcriptionLogger.info("Parakeet ensureLoaded took \(String(format: "%.2f", Date().timeIntervalSince(startLoad)))s")
       let preparedClip = try ParakeetClipPreparer.ensureMinimumDuration(url: url, logger: parakeetLogger)
       defer { preparedClip.cleanup() }
@@ -270,7 +194,6 @@ actor TranscriptionClientLive {
 
     if isSenseVoice(model) {
         transcriptionLogger.notice("Transcribing with SenseVoice model=\(model)")
-        let startLoad = Date()
         try await downloadAndLoadModel(variant: model) { p in progressCallback(p) }
         let text = try await senseVoice.transcribe(audioURL: url)
         transcriptionLogger.info("SenseVoice transcription finished")
@@ -278,45 +201,28 @@ actor TranscriptionClientLive {
     }
 
     let model = await resolveVariant(model)
-    // Load or switch to the required model if needed.
     if whisperKit == nil || model != currentModelName {
       unloadCurrentModel()
       let startLoad = Date()
-      try await downloadAndLoadModel(variant: model) { p in
-        // Debug logging, or scale as desired:
-        progressCallback(p)
-      }
+      try await downloadAndLoadModel(variant: model) { p in progressCallback(p) }
       let loadDuration = Date().timeIntervalSince(startLoad)
       transcriptionLogger.info("WhisperKit ensureLoaded model=\(model) took \(String(format: "%.2f", loadDuration))s")
     }
 
     guard let whisperKit = whisperKit else {
-      throw NSError(
-        domain: "TranscriptionClient",
-        code: -1,
-        userInfo: [
-          NSLocalizedDescriptionKey: "Failed to initialize WhisperKit for model: \(model)",
-        ]
-      )
+      throw NSError(domain: "TranscriptionClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to initialize WhisperKit for model: \(model)"])
     }
 
-    // Perform the transcription.
     transcriptionLogger.notice("Transcribing with WhisperKit model=\(model) file=\(url.lastPathComponent)")
     let startTx = Date()
     let results = try await whisperKit.transcribe(audioPath: url.path, decodeOptions: options)
     transcriptionLogger.info("WhisperKit transcription took \(String(format: "%.2f", Date().timeIntervalSince(startTx)))s")
     transcriptionLogger.info("WhisperKit request total elapsed \(String(format: "%.2f", Date().timeIntervalSince(startAll)))s")
-
-    // Concatenate results from all segments.
-    let text = results.map(\.text).joined(separator: " ")
-    return text
+    return results.map(\.text).joined(separator: " ")
   }
 
-  // MARK: - Private Helpers
-
-  /// Resolve wildcard patterns (e.g. "distil*large-v3") to a concrete model name.
-  /// Preference: downloaded > non-turbo > any match.
   private func resolveVariant(_ variant: String) async -> String {
+    if variant.contains("/") { return variant } // Assume direct User/Repo
     if !(variant.contains("*") || variant.contains("?")) { return variant }
     let names: [String]
     do { names = try await WhisperKit.fetchAvailableModels() } catch { return variant }
@@ -340,170 +246,122 @@ actor TranscriptionClientLive {
     name.localizedCaseInsensitiveContains("SenseVoice")
   }
 
-  /// Creates or returns the local folder (on disk) for a given `variant` model.
   private func modelPath(for variant: String) -> URL {
-    if isSenseVoice(variant) && variant.contains("/") {
+    if variant.contains("/") {
         let components = variant.components(separatedBy: "/")
         if components.count >= 2 {
-            let owner = components[0]
-            let repo = components[1]
-            return modelsBaseFolder
-                .appendingPathComponent(owner)
-                .appendingPathComponent(repo)
+            var path = modelsBaseFolder
+            for component in components {
+                path.appendPathComponent(component)
+            }
+            return path
         }
     }
 
-    // Remove any possible path traversal or invalid characters from variant name
+    // Default legacy path (argmaxinc/whisperkit-coreml)
     let sanitizedVariant = variant.components(separatedBy: CharacterSet(charactersIn: "./\\")).joined(separator: "_")
-
     return modelsBaseFolder
       .appendingPathComponent("argmaxinc")
       .appendingPathComponent("whisperkit-coreml")
       .appendingPathComponent(sanitizedVariant, isDirectory: true)
   }
 
-  /// Creates or returns the local folder for the tokenizer files of a given `variant`.
   private func tokenizerPath(for variant: String) -> URL {
-    modelPath(for: variant).appendingPathComponent("tokenizer", isDirectory: true)
+    let modelFolder = modelPath(for: variant)
+    let tokenizerSubdir = modelFolder.appendingPathComponent("tokenizer", isDirectory: true)
+    // Check if tokenizer directory exists
+    return FileManager.default.fileExists(atPath: tokenizerSubdir.path) ? tokenizerSubdir : modelFolder
   }
 
-  // Unloads any currently loaded model (clears `whisperKit` and `currentModelName`).
   private func unloadCurrentModel() {
     whisperKit = nil
     currentModelName = nil
   }
 
-  /// Downloads the model to a temporary folder (if it isn't already on disk),
-  /// then moves it into its final folder in `modelsBaseFolder`.
-  private func downloadModelIfNeeded(
-    variant: String,
-    progressCallback: @escaping (Progress) -> Void
-  ) async throws {
+  private func downloadModelIfNeeded(variant: String, progressCallback: @escaping (Progress) -> Void) async throws {
     let modelFolder = modelPath(for: variant)
-
-    let isDownloaded: Bool
-    if isSenseVoice(variant) {
-        isDownloaded = await senseVoice.isModelAvailable(modelFolder.path)
-    } else {
-        isDownloaded = await isModelDownloaded(variant)
-    }
-
-    // If the model folder exists but isn't a complete model, clean it up
+    let isDownloaded = await isModelDownloaded(variant)
     if FileManager.default.fileExists(atPath: modelFolder.path), !isDownloaded {
       try? FileManager.default.removeItem(at: modelFolder)
     }
-
-    // If model is already fully downloaded, we're done
-    if isDownloaded {
-      return
-    }
+    if isDownloaded { return }
 
     modelsLogger.info("Downloading model \(variant)")
-
-    // Create parent directories
     let parentDir = modelFolder.deletingLastPathComponent()
     try FileManager.default.createDirectory(at: parentDir, withIntermediateDirectories: true)
 
     if isSenseVoice(variant) {
         try FileManager.default.createDirectory(at: modelFolder, withIntermediateDirectories: true)
-        // Manual download for SenseVoice (model.int8.onnx and tokens.txt)
         let files = ["model.int8.onnx", "tokens.txt"]
         var repo = variant
-
-        // Smart mapping: The official repo has SafeTensors, but we need ONNX.
-        // Map official ID to the compatible Sherpa-ONNX converted model.
         if variant == "FunAudioLLM/SenseVoiceSmall" {
             repo = "sherpa-ai/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"
         }
 
         let totalProgress = Progress(totalUnitCount: Int64(files.count * 100))
         progressCallback(totalProgress)
-
         for (index, file) in files.enumerated() {
-            let urlStr = "https://huggingface.co/\(repo)/resolve/main/\(file)"
+            let encodedFile = file.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? file
+            let urlStr = "https://huggingface.co/\(repo)/resolve/main/\(encodedFile)"
             guard let url = URL(string: urlStr) else { continue }
             let dest = modelFolder.appendingPathComponent(file)
-
-            // Simple download (synchronous for simplicity in this context, or await URLSession)
             let (data, _) = try await URLSession.shared.data(from: url)
             try data.write(to: dest)
-
             totalProgress.completedUnitCount = Int64((index + 1) * 100)
             progressCallback(totalProgress)
         }
         return
     }
 
+    // Generic User/Repo -> Use HuggingFaceClient
+    if variant.contains("/") {
+        try await huggingFace.download(variant, modelFolder, progressCallback)
+        return
+    }
+
+    // Default WhisperKit (argmaxinc)
     do {
-      // Download directly using the exact variant name provided
-      // WhisperKit 0.15.0 changed downloader params: passing
-      // "argmaxinc/whisperkit-coreml" to a parameter interpreted as a host
-      // yields NSURLErrorCannotFindHost in production builds that need
-      // to fetch models for the first time. Let WhisperKit use its
-      // default repo/host (Hugging Face) by omitting the repo/host arg.
       let tempFolder = try await WhisperKit.download(
         variant: variant,
         downloadBase: nil,
         useBackgroundSession: false,
-        progressCallback: { progress in
-          progressCallback(progress)
-        }
+        progressCallback: { progressCallback($0) }
       )
-
-      // Ensure target folder exists
       try FileManager.default.createDirectory(at: modelFolder, withIntermediateDirectories: true)
-
-      // Move the downloaded snapshot to the final location
       try moveContents(of: tempFolder, to: modelFolder)
-
       modelsLogger.info("Downloaded model to \(modelFolder.path)")
     } catch {
-      // Clean up any partial download if an error occurred
       if FileManager.default.fileExists(atPath: modelFolder.path) {
         try? FileManager.default.removeItem(at: modelFolder)
       }
-
-      // Rethrow the original error
       modelsLogger.error("Error downloading model \(variant): \(error.localizedDescription)")
       throw error
     }
   }
 
-  /// Loads a local model folder via `WhisperKitConfig`, optionally reporting load progress.
-  private func loadWhisperKitModel(
-    _ modelName: String,
-    progressCallback: @escaping (Progress) -> Void
-  ) async throws {
+  private func loadWhisperKitModel(_ modelName: String, progressCallback: @escaping (Progress) -> Void) async throws {
     let loadingProgress = Progress(totalUnitCount: 100)
     loadingProgress.completedUnitCount = 0
     progressCallback(loadingProgress)
 
     let modelFolder = modelPath(for: modelName)
-    let tokenizerFolder = tokenizerPath(for: modelName)
+    let tPath = tokenizerPath(for: modelName)
 
-    // Use WhisperKit's config to load the model
     let config = WhisperKitConfig(
       model: modelName,
       modelFolder: modelFolder.path,
-      tokenizerFolder: tokenizerFolder,
-      // verbose: true,
-      // logLevel: .debug,
+      tokenizerFolder: tPath,
       prewarm: false,
       load: true
     )
 
-    // The initializer automatically calls `loadModels`.
     whisperKit = try await WhisperKit(config)
     currentModelName = modelName
-
-    // Finalize load progress
     loadingProgress.completedUnitCount = 100
     progressCallback(loadingProgress)
-
     modelsLogger.info("Loaded WhisperKit model \(modelName)")
   }
 
-  /// Moves all items from `sourceFolder` into `destFolder` (shallow move of directory contents).
   private func moveContents(of sourceFolder: URL, to destFolder: URL) throws {
     let fileManager = FileManager.default
     let items = try fileManager.contentsOfDirectory(atPath: sourceFolder.path)
