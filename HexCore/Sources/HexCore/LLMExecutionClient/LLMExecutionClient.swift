@@ -96,6 +96,19 @@ private func resolveProvider(
     providers: [LLMProvider],
     preferences: LLMProviderPreferences
 ) throws -> LLMProvider {
+    // Handle dynamic resolution for the "preferred" provider
+    if config.providerID == LLMProvider.preferredProviderIdentifier {
+        if let preferredID = preferences.preferredProviderID,
+           let provider = providers.first(where: { $0.id == preferredID }) {
+            return provider
+        }
+        // Fallback: if no preferred provider is set (or found), pick the first available one.
+        if let first = providers.first {
+            return first
+        }
+        throw LLMExecutionError.providerNotFound("No providers available for preferred selection")
+    }
+
     if let exact = providers.first(where: { $0.id == config.providerID }) {
         return exact
     }
@@ -109,6 +122,8 @@ private func runtime(for provider: LLMProvider) throws -> LLMProviderRuntime {
         return ClaudeCodeProviderRuntime()
     case .ollama:
         return OllamaProviderRuntime()
+    case .openAI:
+        return OpenAIProviderRuntime()
     default:
         throw LLMExecutionError.unsupportedProvider(provider.type.rawValue)
     }

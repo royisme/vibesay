@@ -117,6 +117,7 @@ public struct ModelDownloadFeature {
 		public var downloadProgress: Double = 0
 		public var downloadError: String?
 		public var downloadingModelName: String?
+		public var customModelID: String = ""
 
 		// Track which model generated a progress update to handle switching models
 		public var activeDownloadID: UUID?
@@ -140,6 +141,7 @@ public struct ModelDownloadFeature {
 		case fetchModels
 		case selectModel(String)
 		case toggleModelDisplay
+		case enterCustomModel
 		case downloadSelectedModel
 		// Effects
 		case modelsLoaded(recommended: String, available: [ModelInfo])
@@ -234,6 +236,22 @@ public struct ModelDownloadFeature {
 		case .toggleModelDisplay:
 			state.showAllModels.toggle()
 			return .none
+
+		case .enterCustomModel:
+			guard !state.customModelID.isEmpty else { return .none }
+			let newModel = state.customModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+
+			// Add to available models if not present
+			if !state.availableModels.contains(where: { $0.name == newModel }) {
+				state.availableModels.append(ModelInfo(name: newModel, isDownloaded: false))
+			}
+
+			// Select and download
+			state.$hexSettings.withLock { $0.selectedModel = newModel }
+			updateBootstrapState(&state)
+			state.customModelID = ""
+
+			return .send(.downloadSelectedModel)
 
 		case let .selectModel(model):
 			// If the curated item is a glob (e.g., "distil*large-v3"),

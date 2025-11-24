@@ -74,6 +74,7 @@ actor TranscriptionClientLive {
   /// The name of the currently loaded model, if any.
   private var currentModelName: String?
   private var parakeet: ParakeetClient = ParakeetClient()
+  private var senseVoice: SenseVoiceClient = SenseVoiceClient()
 
   /// The base folder under which we store model data (e.g., ~/Library/Application Support/...).
   private lazy var modelsBaseFolder: URL = {
@@ -106,6 +107,14 @@ actor TranscriptionClientLive {
       currentModelName = variant
       return
     }
+
+    if isSenseVoice(variant) {
+        try await downloadModelIfNeeded(variant: variant, progressCallback: progressCallback)
+        try await senseVoice.ensureLoaded(modelPath: modelPath(for: variant).path)
+        currentModelName = variant
+        return
+    }
+
     // Resolve wildcard patterns (e.g., "distil*large-v3") to a concrete variant
     let variant = await resolveVariant(variant)
     // Special handling for corrupted or malformed variant names
@@ -184,6 +193,9 @@ actor TranscriptionClientLive {
       parakeetLogger.debug("Parakeet available? \(available)")
       return available
     }
+    if isSenseVoice(modelName) {
+        return await senseVoice.isModelAvailable(modelPath(for: modelName).path)
+    }
     let modelFolderPath = modelPath(for: modelName).path
     let fileManager = FileManager.default
 
@@ -255,6 +267,16 @@ actor TranscriptionClientLive {
       transcriptionLogger.info("Parakeet request total elapsed \(String(format: "%.2f", Date().timeIntervalSince(startAll)))s")
       return text
     }
+
+    if isSenseVoice(model) {
+        transcriptionLogger.notice("Transcribing with SenseVoice model=\(model)")
+        let startLoad = Date()
+        try await downloadAndLoadModel(variant: model) { p in progressCallback(p) }
+        let text = try await senseVoice.transcribe(audioURL: url)
+        transcriptionLogger.info("SenseVoice transcription finished")
+        return text
+    }
+
     let model = await resolveVariant(model)
     // Load or switch to the required model if needed.
     if whisperKit == nil || model != currentModelName {
@@ -314,8 +336,23 @@ actor TranscriptionClientLive {
     ParakeetModel(rawValue: name) != nil
   }
 
+  private func isSenseVoice(_ name: String) -> Bool {
+    name.localizedCaseInsensitiveContains("SenseVoice")
+  }
+
   /// Creates or returns the local folder (on disk) for a given `variant` model.
   private func modelPath(for variant: String) -> URL {
+    if isSenseVoice(variant) && variant.contains("/") {
+        let components = variant.components(separatedBy: "/")
+        if components.count >= 2 {
+            let owner = components[0]
+            let repo = components[1]
+            return modelsBaseFolder
+                .appendingPathComponent(owner)
+                .appendingPathComponent(repo)
+        }
+    }
+
     // Remove any possible path traversal or invalid characters from variant name
     let sanitizedVariant = variant.components(separatedBy: CharacterSet(charactersIn: "./\\")).joined(separator: "_")
 
@@ -344,10 +381,16 @@ actor TranscriptionClientLive {
   ) async throws {
     let modelFolder = modelPath(for: variant)
 
+    let isDownloaded: Bool
+    if isSenseVoice(variant) {
+        isDownloaded = await senseVoice.isModelAvailable(modelFolder.path)
+    } else {
+        isDownloaded = await isModelDownloaded(variant)
+    }
+
     // If the model folder exists but isn't a complete model, clean it up
-    let isDownloaded = await isModelDownloaded(variant)
     if FileManager.default.fileExists(atPath: modelFolder.path), !isDownloaded {
-      try FileManager.default.removeItem(at: modelFolder)
+      try? FileManager.default.removeItem(at: modelFolder)
     }
 
     // If model is already fully downloaded, we're done
@@ -360,6 +403,36 @@ actor TranscriptionClientLive {
     // Create parent directories
     let parentDir = modelFolder.deletingLastPathComponent()
     try FileManager.default.createDirectory(at: parentDir, withIntermediateDirectories: true)
+
+    if isSenseVoice(variant) {
+        try FileManager.default.createDirectory(at: modelFolder, withIntermediateDirectories: true)
+        // Manual download for SenseVoice (model.int8.onnx and tokens.txt)
+        let files = ["model.int8.onnx", "tokens.txt"]
+        var repo = variant
+
+        // Smart mapping: The official repo has SafeTensors, but we need ONNX.
+        // Map official ID to the compatible Sherpa-ONNX converted model.
+        if variant == "FunAudioLLM/SenseVoiceSmall" {
+            repo = "sherpa-ai/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"
+        }
+
+        let totalProgress = Progress(totalUnitCount: Int64(files.count * 100))
+        progressCallback(totalProgress)
+
+        for (index, file) in files.enumerated() {
+            let urlStr = "https://huggingface.co/\(repo)/resolve/main/\(file)"
+            guard let url = URL(string: urlStr) else { continue }
+            let dest = modelFolder.appendingPathComponent(file)
+
+            // Simple download (synchronous for simplicity in this context, or await URLSession)
+            let (data, _) = try await URLSession.shared.data(from: url)
+            try data.write(to: dest)
+
+            totalProgress.completedUnitCount = Int64((index + 1) * 100)
+            progressCallback(totalProgress)
+        }
+        return
+    }
 
     do {
       // Download directly using the exact variant name provided

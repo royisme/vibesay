@@ -71,7 +71,43 @@ public struct TextTransformationsState: Codable, Equatable, Sendable {
 		lastSelectedModeID: UUID? = nil,
 		schemaVersion: Int = TextTransformationsState.currentSchemaVersion
 	) {
-		let resolvedModes = modes.isEmpty ? [TransformationMode(name: "General", pipeline: .init())] : modes
+		var resolvedModes = modes
+		if resolvedModes.isEmpty {
+			// 1. General Mode (Default)
+			resolvedModes.append(TransformationMode(name: "General", pipeline: .init()))
+
+			// 2. Coding Mode (Optimized for Mixed CN/EN)
+			let codingPrompt = """
+			你是一个资深的软件开发助手。用户正在使用语音输入编写技术文档或代码。
+			输入文本是一段中文与英文技术术语混合的语音转录结果，其中英文术语可能因为发音问题被识别错误（可能是同音中文或拼写错误的单词）。
+			请修正文本中的技术术语错误，保持原意不变。只输出修正后的文本，不要包含任何解释。
+
+			上下文线索：Swift, Python, LLM, TCA, Git, Kubernetes.
+
+			输入: {{input}}
+			"""
+
+			let codingPipeline = TextTransformationPipeline(transformations: [
+				Transformation(type: .llm(LLMTransformationConfig(
+					providerID: LLMProvider.preferredProviderIdentifier,
+					promptTemplate: codingPrompt
+				)))
+			])
+
+			let codingMode = TransformationMode(
+				name: "Coding",
+				pipeline: codingPipeline,
+				appliesToBundleIdentifiers: [
+					"com.apple.dt.Xcode",
+					"com.microsoft.VSCode",
+					"com.todesktop.230313mzl4w4u92", // Cursor
+					"com.googlecode.iterm2",
+					"com.apple.Terminal"
+				]
+			)
+			resolvedModes.append(codingMode)
+		}
+
 		self.modes = resolvedModes
 		self.providers = providers
 		self.schemaVersion = schemaVersion
