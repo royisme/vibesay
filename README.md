@@ -1,36 +1,54 @@
-# Hex — Voice → Text
+# Hex — Developer's Voice Input
 
-Press-and-hold a hotkey to transcribe your voice and paste the result wherever you're typing.
+> **专注为开发者打造的 macOS 语音输入工具。**
+> 特别优化中英文混合输入场景，精准识别技术术语、函数名与代码片段。
 
-**[Download Hex for macOS](https://hex-updates.s3.us-east-1.amazonaws.com/hex-latest.dmg)**
-> **Note:** Hex is currently only available for **Apple Silicon** Macs.
+**[开发路线图 (Roadmap)](docs/ROADMAP.md)** | **[架构与优化方案](docs/architecture_and_optimization_plan.md)**
 
-I've opened-sourced the project in the hopes that others will find it useful! Hex supports both [Parakeet TDT v3](https://github.com/FluidInference/FluidAudio) via the awesome [FluidAudio](https://github.com/FluidInference/FluidAudio) (the default—it's frickin' unbelievable: fast, multilingual, and cloud-optimized) and the awesome [WhisperKit](https://github.com/argmaxinc/WhisperKit) for on-device transcription. We use the incredible [Swift Composable Architecture](https://github.com/pointfreeco/swift-composable-architecture) for structuring the app. Please open issues with any questions or feedback! ❤️
+Hex 是一个开源的 macOS 菜单栏应用，基于 **[TCA](https://github.com/pointfreeco/swift-composable-architecture)** 架构构建。
+本项目（Fork 版）致力于解决开发者在语音输入时的核心痛点：**中英文夹杂识别率低、专业术语拼写错误**。
 
-## Instructions
+通过结合 **Whisper/Parakeet** 的强大听力与 **LLM (大语言模型)** 的理解能力，Hex 能“听懂”你的代码意图。
 
-Once you open Hex, you'll need to grant it microphone and accessibility permissions—so it can record your voice and paste the transcribed text into any application, respectively.
+## 核心特性 (Features)
 
-Once you've configured a global hotkey, there are **two recording modes**:
+*   **⚡️ 极速转录**: 支持 [WhisperKit](https://github.com/argmaxinc/WhisperKit) (CoreML) 和 [FluidAudio/Parakeet](https://github.com/FluidInference/FluidAudio) 端侧模型。
+*   **🧠 智能纠错 (Coming Soon)**: 利用 LLM (Ollama/OpenAI) 对识别结果进行后处理，自动修正 `kubernetes`, `async/await`, `useEffect` 等技术名词的拼写错误。
+*   **🔌 开放模型生态 (Planned)**: 将支持直接从 Hugging Face 下载任意 CoreML 模型，不再受限于预置列表。
+*   **⌨️ 开发者友好**: 专为 Xcode, VSCode, Cursor 等编辑器优化，支持自定义 "Coding Mode"。
 
-1. **Press-and-hold** the hotkey to begin recording, say whatever you want, and then release the hotkey to start the transcription process. 
-2. **Double-tap** the hotkey to *lock recording*, say whatever you want, and then **tap** the hotkey once more to start the transcription process.
+## 快速开始 (Getting Started)
 
-## Contributing
+1.  **下载**: (请自行编译或等待发布)
+2.  **权限**: 首次运行需授予麦克风和辅助功能权限（用于自动粘贴）。
+3.  **使用**:
+    *   **按住** 全局热键说话，松开即转录。
+    *   **双击** 热键锁定录音，再次单击结束。
 
-**Issue reports are welcome!** If you encounter bugs or have feature requests, please [open an issue](https://github.com/kitlangton/Hex/issues).
+## 开发计划 (Roadmap)
 
-**Note on Pull Requests:** At this stage, I'm not actively reviewing code contributions for significant features or core logic changes. The project is evolving rapidly and it's easier for me to work directly from issue reports. Bug fixes and documentation improvements are still appreciated, but please open an issue first to discuss before investing time in a large PR. Thanks for understanding!
+我们需要你的帮助来共同打造这个工具！请查看 **[docs/ROADMAP.md](docs/ROADMAP.md)** 了解详细的迭代计划，包括：
 
-### Changelog workflow
+*   **阶段一**: LLM 后处理流水线与 Prompt 优化。
+*   **阶段二**: 自定义 Hugging Face 模型源。
+*   **阶段三**: IDE 上下文感知 (RAG)。
 
-- **For AI agents:** Run `bun run changeset:add-ai <type> "summary"` (e.g., `bun run changeset:add-ai patch "Fix clipboard timing"`) to create a changeset non-interactively.
-- **For humans:** Run `bunx changeset` when your PR needs release notes. Pick `patch`, `minor`, or `major` and write a short summary—this creates a `.changeset/*.md` fragment.
-- Check what will ship with `bunx changeset status --verbose`.
-- `npm run sync-changelog` (or `bun run tools/scripts/sync-changelog.ts`) mirrors the root `CHANGELOG.md` into `Hex/Resources/changelog.md` so the in-app sheet always matches GitHub releases.
-- The release tool consumes the pending fragments, bumps `package.json` + `Info.plist`, regenerates `CHANGELOG.md`, and feeds the resulting section to GitHub + Sparkle automatically. Releases fail fast if no changesets are queued, so you can't forget.
-- If you truly need to ship without pending Changesets (for example, re-running a failed publish), the release script will now prompt you to confirm and choose a `patch`/`minor`/`major` bump interactively before continuing.
+## 构建与贡献 (Development)
+
+本项目使用 Swift 开发，依赖 **Xcode 15+** 和 **macOS 14+**。
+
+```bash
+# 克隆仓库
+git clone https://github.com/YourUsername/Hex.git
+cd Hex
+
+# 构建
+xcodebuild -scheme Hex -configuration Release
+```
+
+欢迎提交 Issue 或 PR！详细架构分析请参阅 [架构文档](docs/architecture_and_optimization_plan.md)。
 
 ## License
 
-This project is licensed under the MIT License. See `LICENSE` for details.
+This project is licensed under the MIT License.
+Based on the original work by [Kit Langton](https://github.com/kitlangton/Hex).
