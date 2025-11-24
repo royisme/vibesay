@@ -12,6 +12,7 @@ let package = Package(
 	        .package(url: "https://github.com/pointfreeco/swift-dependencies", from: "1.0.0"),
 	        .package(url: "https://github.com/apple/swift-log", from: "1.6.4"),
 	        .package(url: "https://github.com/Cocoanetics/SwiftMCP.git", branch: "main"),
+	        .package(url: "https://github.com/k2-fsa/sherpa-onnx", from: "1.10.0"),
 	    ],
     targets: [
 	    .target(
@@ -22,6 +23,7 @@ let package = Package(
 	            .product(name: "DependenciesMacros", package: "swift-dependencies"),
 	            .product(name: "Logging", package: "swift-log"),
 	            .product(name: "SwiftMCP", package: "SwiftMCP"),
+	            .product(name: "SherpaOnnx", package: "sherpa-onnx"),
 	        ],
 	        path: "Sources/HexCore",
 	        resources: [

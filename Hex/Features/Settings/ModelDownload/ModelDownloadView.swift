@@ -41,6 +41,26 @@ public struct ModelDownloadView: View {
 			}
 			// Always show a concise, opinionated list (no dropdowns)
 			CuratedList(store: store)
+
+			// Advanced / Custom Model
+			DisclosureGroup("Advanced") {
+				VStack(alignment: .leading) {
+					HStack {
+						TextField("Repo ID (user/repo:variant)", text: $store.customModelID)
+							.textFieldStyle(.roundedBorder)
+							.font(HexDesign.Fonts.code(size: 12))
+						Button("Add") {
+							store.send(.enterCustomModel)
+						}
+						.disabled(store.customModelID.isEmpty)
+					}
+					Text("Enter a Hugging Face model ID compatible with WhisperKit.")
+						.font(.caption)
+						.foregroundColor(.secondary)
+				}
+				.padding(.vertical, 4)
+			}
+
 			if let err = store.downloadError {
 				Text("Download Error: \(err)")
 					.foregroundColor(.red)
