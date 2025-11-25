@@ -29,7 +29,9 @@ extension HuggingFaceClient: DependencyKey {
 
             for file in detailedFiles {
                 let encodedPath = file.path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? file.path
-                let fileURL = URL(string: "https://huggingface.co/\(encodedRepoId)/resolve/main/\(encodedPath)")!
+                guard let fileURL = URL(string: "https://huggingface.co/\(encodedRepoId)/resolve/main/\(encodedPath)") else {
+                     throw NSError(domain: "HuggingFaceClient", code: -2, userInfo: [NSLocalizedDescriptionKey: "Invalid file URL for path: \(file.path)"])
+                }
                 let destURL = destination.appendingPathComponent(file.path)
 
                 try FileManager.default.createDirectory(at: destURL.deletingLastPathComponent(), withIntermediateDirectories: true)

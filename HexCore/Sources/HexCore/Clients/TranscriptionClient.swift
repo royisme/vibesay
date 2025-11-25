@@ -302,7 +302,8 @@ public actor TranscriptionClientLive {
         progressCallback(totalProgress)
         for (index, file) in files.enumerated() {
             let encodedFile = file.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? file
-            let urlStr = "https://huggingface.co/\(repo)/resolve/main/\(encodedFile)"
+            let encodedRepo = repo.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? repo
+            let urlStr = "https://huggingface.co/\(encodedRepo)/resolve/main/\(encodedFile)"
             guard let url = URL(string: urlStr) else { continue }
             let dest = modelFolder.appendingPathComponent(file)
             let (data, _) = try await URLSession.shared.data(from: url)
