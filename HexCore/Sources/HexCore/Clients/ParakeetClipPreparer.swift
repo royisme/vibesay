@@ -1,24 +1,23 @@
 import AVFoundation
 import Foundation
-import HexCore
 import os.log
 
-struct ParakeetClipPreparationResult {
-  let url: URL
+public struct ParakeetClipPreparationResult: Sendable {
+  public let url: URL
   private let cleanupURL: URL?
 
-  init(url: URL, cleanupURL: URL?) {
+  public init(url: URL, cleanupURL: URL?) {
     self.url = url
     self.cleanupURL = cleanupURL
   }
 
-  func cleanup() {
+  public func cleanup() {
     guard let cleanupURL else { return }
     try? FileManager.default.removeItem(at: cleanupURL)
   }
 }
 
-enum ParakeetClipPreparer {
+public enum ParakeetClipPreparer {
   private enum Error: LocalizedError {
     case unsupportedFormat
     case bufferAllocationFailed
@@ -35,9 +34,9 @@ enum ParakeetClipPreparer {
 
   // FluidAudio's LastChunkHandling guidance recommends chunk_duration 1.5s,
   // so pad to at least that window to avoid decoder errors.
-  static let defaultMinimumDuration: TimeInterval = 1.5
+  public static let defaultMinimumDuration: TimeInterval = 1.5
 
-  static func ensureMinimumDuration(
+  public static func ensureMinimumDuration(
     url: URL,
     minimumDuration: TimeInterval = defaultMinimumDuration,
     logger: os.Logger = HexLog.parakeet

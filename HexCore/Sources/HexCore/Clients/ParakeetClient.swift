@@ -1,10 +1,8 @@
 import Foundation
-import HexCore
-
 #if canImport(FluidAudio)
 import FluidAudio
 
-actor ParakeetClient {
+public actor ParakeetClient {
   private var asr: AsrManager?
   private var models: AsrModels?
   private var currentVariant: ParakeetModel?
@@ -17,7 +15,9 @@ actor ParakeetClient {
     "FluidAudio/Models"
   ]
 
-  func isModelAvailable(_ modelName: String) async -> Bool {
+  public init() {}
+
+  public func isModelAvailable(_ modelName: String) async -> Bool {
     guard let variant = ParakeetModel(rawValue: modelName) else {
       logger.error("Unknown Parakeet variant requested: \(modelName)")
       return false
@@ -58,7 +58,7 @@ actor ParakeetClient {
     return false
   }
 
-  func ensureLoaded(modelName: String, progress: @escaping (Progress) -> Void) async throws {
+  public func ensureLoaded(modelName: String, progress: @escaping (Progress) -> Void) async throws {
     guard let variant = ParakeetModel(rawValue: modelName) else {
       throw NSError(
         domain: "Parakeet",
@@ -119,7 +119,7 @@ actor ParakeetClient {
     return total
   }
 
-  func transcribe(_ url: URL) async throws -> String {
+  public func transcribe(_ url: URL) async throws -> String {
     guard let asr else { throw NSError(domain: "Parakeet", code: -1, userInfo: [NSLocalizedDescriptionKey: "Parakeet not initialized"]) }
     let t0 = Date()
     logger.notice("Transcribing with Parakeet file=\(url.lastPathComponent)")
@@ -129,7 +129,7 @@ actor ParakeetClient {
   }
 
   // Delete cached Parakeet models from known locations and reset state
-  func deleteCaches(modelName: String) async throws {
+  public func deleteCaches(modelName: String) async throws {
     guard let variant = ParakeetModel(rawValue: modelName) else { return }
     let fm = FileManager.default
 
@@ -184,17 +184,18 @@ private extension ParakeetModel {
 
 #else
 
-actor ParakeetClient {
-  func isModelAvailable(_ modelName: String) async -> Bool { false }
-  func ensureLoaded(modelName: String, progress: @escaping (Progress) -> Void) async throws {
+public actor ParakeetClient {
+  public init() {}
+  public func isModelAvailable(_ modelName: String) async -> Bool { false }
+  public func ensureLoaded(modelName: String, progress: @escaping (Progress) -> Void) async throws {
     throw NSError(
       domain: "Parakeet",
       code: -2,
       userInfo: [NSLocalizedDescriptionKey: "Parakeet support not linked. Add Swift Package: https://github.com/FluidInference/FluidAudio.git and link FluidAudio to Hex."]
     )
   }
-  func transcribe(_ url: URL) async throws -> String { throw NSError(domain: "Parakeet", code: -3, userInfo: [NSLocalizedDescriptionKey: "Parakeet not available"]) }
-  func deleteCaches(modelName: String) async throws {}
+  public func transcribe(_ url: URL) async throws -> String { throw NSError(domain: "Parakeet", code: -3, userInfo: [NSLocalizedDescriptionKey: "Parakeet not available"]) }
+  public func deleteCaches(modelName: String) async throws {}
 }
 
 #endif
