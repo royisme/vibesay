@@ -43,6 +43,9 @@ public struct PermissionClient: Sendable {
   /// Uses `IOHIDCheckAccess` to determine whether we can listen for global keyboard events.
   public var inputMonitoringStatus: @Sendable () -> PermissionStatus = { .notDetermined }
 
+  /// Check the current notification permission status.
+  public var notificationStatus: @Sendable () async -> PermissionStatus = { .notDetermined }
+
   /// Request microphone permission from the user.
   ///
   /// If permission is `.notDetermined`, this will show the system permission dialog.
@@ -62,6 +65,9 @@ public struct PermissionClient: Sendable {
   /// Triggers the consent dialog introduced in macOS Sequoia when listening for keyboard events.
   public var requestInputMonitoring: @Sendable () async -> Bool = { false }
 
+  /// Request notification permission from the user.
+  public var requestNotification: @Sendable () async -> Bool = { false }
+
   /// Open System Settings to the microphone privacy panel.
   ///
   /// Useful when permission is denied and the user needs to manually change it.
@@ -74,6 +80,9 @@ public struct PermissionClient: Sendable {
 
   /// Open System Settings to the Input Monitoring privacy panel.
   public var openInputMonitoringSettings: @Sendable () async -> Void = {}
+
+  /// Open System Settings to the Notifications settings panel.
+  public var openNotificationSettings: @Sendable () async -> Void = {}
 
   /// Observe app activation events.
   ///

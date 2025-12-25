@@ -12,6 +12,7 @@ import Foundation
 import HexCore
 import Sauce
 import SwiftUI
+import UserNotifications
 
 private let pasteboardLogger = HexLog.pasteboard
 
@@ -48,6 +49,7 @@ extension DependencyValues {
 
 struct PasteboardClientLive {
     @Shared(.hexSettings) var hexSettings: HexSettings
+    @Dependency(\.permissions) var permissions
 
     @MainActor
     func paste(text: String) async {
@@ -229,8 +231,31 @@ struct PasteboardClientLive {
             // Keep the transcribed text in clipboard regardless of setting
             pasteboardLogger.notice("Paste operation failed; text remains in clipboard as fallback.")
             
-            // TODO: Could add a notification here to inform user
-            // that text is available in clipboard
+            // Request notification permission if needed
+            let status = await permissions.notificationStatus()
+            if status == .notDetermined {
+                _ = await permissions.requestNotification()
+            }
+
+            // If we have permission, show the notification
+            if await permissions.notificationStatus() == .granted {
+                let content = UNMutableNotificationContent()
+                content.title = "Paste Failed"
+                content.body = "The transcribed text has been copied to your clipboard."
+
+                let request = UNNotificationRequest(
+                    identifier: UUID().uuidString,
+                    content: content,
+                    trigger: nil
+                )
+
+                do {
+                    try await UNUserNotificationCenter.current().add(request)
+                    pasteboardLogger.info("Scheduled paste failure notification")
+                } catch {
+                    pasteboardLogger.error("Failed to schedule notification: \(error)")
+                }
+            }
         }
     }
 

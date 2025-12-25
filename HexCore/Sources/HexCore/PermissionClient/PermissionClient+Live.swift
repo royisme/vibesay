@@ -5,6 +5,7 @@ import Dependencies
 import Foundation
 import IOKit
 import IOKit.hidsystem
+import UserNotifications
 
 private let logger = HexLog.permissions
 
@@ -15,12 +16,15 @@ extension PermissionClient: DependencyKey {
       microphoneStatus: { await live.microphoneStatus() },
       accessibilityStatus: { live.accessibilityStatus() },
       inputMonitoringStatus: { live.inputMonitoringStatus() },
+      notificationStatus: { await live.notificationStatus() },
       requestMicrophone: { await live.requestMicrophone() },
       requestAccessibility: { await live.requestAccessibility() },
       requestInputMonitoring: { await live.requestInputMonitoring() },
+      requestNotification: { await live.requestNotification() },
       openMicrophoneSettings: { await live.openMicrophoneSettings() },
       openAccessibilitySettings: { await live.openAccessibilitySettings() },
       openInputMonitoringSettings: { await live.openInputMonitoringSettings() },
+      openNotificationSettings: { await live.openNotificationSettings() },
       observeAppActivation: { live.observeAppActivation() }
     )
   }
@@ -168,6 +172,46 @@ actor PermissionClientLive {
     await MainActor.run {
       _ = NSWorkspace.shared.open(
         URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")!
+      )
+    }
+  }
+
+  // MARK: - Notification Permissions
+
+  func notificationStatus() async -> PermissionStatus {
+    let settings = await UNUserNotificationCenter.current().notificationSettings()
+    let result: PermissionStatus
+    switch settings.authorizationStatus {
+    case .authorized, .provisional, .ephemeral:
+      result = .granted
+    case .denied:
+      result = .denied
+    case .notDetermined:
+      result = .notDetermined
+    @unknown default:
+      result = .denied
+    }
+    logger.info("Notification status: \(String(describing: result))")
+    return result
+  }
+
+  func requestNotification() async -> Bool {
+    logger.info("Requesting notification permission...")
+    do {
+      let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
+      logger.info("Notification permission granted: \(granted)")
+      return granted
+    } catch {
+      logger.error("Failed to request notification permission: \(error)")
+      return false
+    }
+  }
+
+  func openNotificationSettings() async {
+    logger.info("Opening notification settings in System Preferences...")
+    await MainActor.run {
+      _ = NSWorkspace.shared.open(
+        URL(string: "x-apple.systempreferences:com.apple.preference.notifications")!
       )
     }
   }
