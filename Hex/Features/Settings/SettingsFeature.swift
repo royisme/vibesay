@@ -20,6 +20,10 @@ extension SharedReaderKey
   static var isSettingPasteLastTranscriptHotkey: Self {
     Self[.inMemory("isSettingPasteLastTranscriptHotkey"), default: false]
   }
+
+  static var isRemappingScratchpadFocused: Self {
+    Self[.inMemory("isRemappingScratchpadFocused"), default: false]
+  }
 }
 
 // MARK: - Settings Feature
@@ -31,16 +35,18 @@ struct SettingsFeature {
     @Shared(.hexSettings) var hexSettings: HexSettings
     @Shared(.isSettingHotKey) var isSettingHotKey: Bool = false
     @Shared(.isSettingPasteLastTranscriptHotkey) var isSettingPasteLastTranscriptHotkey: Bool = false
+    @Shared(.isRemappingScratchpadFocused) var isRemappingScratchpadFocused: Bool = false
     @Shared(.transcriptionHistory) var transcriptionHistory: TranscriptionHistory
     @Shared(.hotkeyPermissionState) var hotkeyPermissionState: HotkeyPermissionState
-    @Shared(.textTransformations) var textTransformations: TextTransformationsState
 
     var languages: IdentifiedArrayOf<Language> = []
     var currentModifiers: Modifiers = .init(modifiers: [])
     var currentPasteLastModifiers: Modifiers = .init(modifiers: [])
+    var remappingScratchpadText: String = ""
     
     // Available microphones
     var availableInputDevices: [AudioInputDevice] = []
+    var defaultInputDeviceName: String?
 
     // Model Management
     var modelDownload = ModelDownloadFeature.State()
@@ -71,7 +77,7 @@ struct SettingsFeature {
 
     // Microphone selection
     case loadAvailableInputDevices
-    case availableInputDevicesLoaded([AudioInputDevice])
+    case availableInputDevicesLoaded([AudioInputDevice], String?)
 
     // Model Management
     case modelDownload(ModelDownloadFeature.Action)
@@ -87,6 +93,11 @@ struct SettingsFeature {
     case logExportFinished(URL)
     case logExportFailed(String)
     case logExportCancelled
+
+    // Word remappings
+    case addWordRemapping
+    case removeWordRemapping(UUID)
+    case setRemappingScratchpadFocused(Bool)
   }
 
   @Dependency(\.keyEventMonitor) var keyEventMonitor
@@ -108,7 +119,7 @@ struct SettingsFeature {
       case .binding:
         return .run { _ in
           await MainActor.run {
-            NotificationCenter.default.post(name: NSNotification.Name("UpdateAppMode"), object: nil)
+            NotificationCenter.default.post(name: .updateAppMode, object: nil)
           }
         }
 
@@ -185,6 +196,22 @@ struct SettingsFeature {
 
       case .startSettingHotKey:
         state.$isSettingHotKey.withLock { $0 = true }
+        return .none
+
+      case .addWordRemapping:
+        state.$hexSettings.withLock {
+          $0.wordRemappings.append(.init(match: "", replacement: ""))
+        }
+        return .none
+
+      case let .removeWordRemapping(id):
+        state.$hexSettings.withLock {
+          $0.wordRemappings.removeAll { $0.id == id }
+        }
+        return .none
+
+      case let .setRemappingScratchpadFocused(isFocused):
+        state.$isRemappingScratchpadFocused.withLock { $0 = isFocused }
         return .none
 
       case .startSettingPasteLastTranscriptHotkey:
@@ -301,11 +328,13 @@ struct SettingsFeature {
       case .loadAvailableInputDevices:
         return .run { send in
           let devices = await recording.getAvailableInputDevices()
-          await send(.availableInputDevicesLoaded(devices))
+          let defaultName = await recording.getDefaultInputDeviceName()
+          await send(.availableInputDevicesLoaded(devices, defaultName))
         }
         
-      case let .availableInputDevicesLoaded(devices):
+      case let .availableInputDevicesLoaded(devices, defaultName):
         state.availableInputDevices = devices
+        state.defaultInputDeviceName = defaultName
         return .none
         
       case let .toggleSaveTranscriptionHistory(enabled):

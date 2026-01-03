@@ -32,36 +32,17 @@ extension URL {
 	}
 }
 
-// MARK: - Developer Feature Flags
-
-enum DeveloperAccess {
-	private static let envKey = "HEX_ENABLE_LLM"
-	private static let featureDirectoryName = "feature_flags"
-	private static let sentinelFileName = "enable_llm_features"
-
-	static var allowsLLMFeatures: Bool {
-		if let envValue = ProcessInfo.processInfo.environment[envKey], isTruthy(envValue) {
-			return true
-		}
-
-		guard let sentinelURL = featureFlagURL else { return false }
-		return FileManager.default.fileExists(atPath: sentinelURL.path)
+extension FileManager {
+	/// Copies a file from legacy location to new location if legacy exists and new doesn't.
+	func migrateIfNeeded(from legacy: URL, to new: URL) {
+		guard fileExists(atPath: legacy.path), !fileExists(atPath: new.path) else { return }
+		try? copyItem(at: legacy, to: new)
 	}
 
-	private static var featureFlagURL: URL? {
-		guard let base = try? URL.hexApplicationSupport else { return nil }
-		return base
-			.appending(component: featureDirectoryName)
-			.appending(component: sentinelFileName)
-	}
-
-	private static func isTruthy(_ value: String) -> Bool {
-		switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-		case "1", "true", "yes", "on":
-			return true
-		default:
-			return false
-		}
+	/// Removes an item only if it exists, swallowing any errors.
+	func removeItemIfExists(at url: URL) {
+		guard fileExists(atPath: url.path) else { return }
+		try? removeItem(at: url)
 	}
 }
 
@@ -84,13 +65,7 @@ extension URL {
 			let newURL = (try? URL.hexApplicationSupport.appending(component: "hex_settings.json"))
 				?? URL.documentsDirectory.appending(component: "hex_settings.json")
 			let legacyURL = URL.legacyDocumentsDirectory.appending(component: "hex_settings.json")
-
-			// Migrate if needed
-			if FileManager.default.fileExists(atPath: legacyURL.path),
-			   !FileManager.default.fileExists(atPath: newURL.path) {
-				try? FileManager.default.copyItem(at: legacyURL, to: newURL)
-			}
-
+			FileManager.default.migrateIfNeeded(from: legacyURL, to: newURL)
 			return newURL
 		}
 	}

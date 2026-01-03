@@ -1,34 +1,42 @@
 # Changelog
 
+## 0.6.5
+
+### Patch Changes
+
+- 140c205: Fix Sparkle auto-update for sandboxed app by adding required XPC entitlements and SUEnableInstallerLauncherService. Users on 0.6.3 will need to manually download this update.
+
+## 0.6.4
+
+### Patch Changes
+
+- c00f79e: Reduce code duplication: add ModelPatternMatcher, FileManager helpers, settingsCaption style, notification constants, and Core Audio helper
+- 658a755: Fix silent recordings caused by device-level microphone mute - automatically detects and fixes muted input devices before recording
+
+## 0.6.3
+
+### Patch Changes
+
+- b4c54ce: Fix microphone priming and media pause races
+- 5217d3f: Add word remappings and remove LLM UI (#000)
+- 4d38708: Add persistent MCP config editing for Claude Code modes
+- bbd0b80: Show system default mic name in picker
+- bbd0b80: Fix Parakeet polling cleanup and organize paste flow
+- 3413d68: Rename Transformations tab to Modes
+- 4d38708: Fix microphone freezing and speech cutoff when using custom microphone. Only switch input device when actually needed, re-prime recorder after device changes, and add cleanup on app termination.
+
 ## 0.6.2
 
 ### Patch Changes
 
 - 7e325ad: Fix Sequoia hotkey deadlock by removing Input Monitoring guard that prevented CGEventTap creation. Tap creation triggers permission prompt naturally. Re-add 'force quit Hex now' voice escape hatch from v0.5.8 (#122 #124)
-- 7e325ad: Remove preferred provider concept - transformations now strictly use configured providerID from text_transformations.json. Throws error if provider not found instead of falling back.
 - 7e325ad: Add missing-model callout and focus settings when transcription starts without a model
-
-## 0.6.1
-
-### Patch Changes
-
-- 804651c: Make LLM processing interruptible by pressing Escape
 
 ## 0.6.0
 
-### Minor Changes
-
-- d583372: Add auto-send keyboard command feature to transformation modes (#119)
-
 ### Patch Changes
 
-- 9474ff7: Auto-detect Claude and Ollama provider binaries (#000)
-- 154238e: Rename transformation stacks to modes throughout codebase
 - 3bf2fb0: Fix voice prefix matching with punctuation - now strips punctuation (.,;:!?) when matching prefixes
-- e797194: Show MCP tool groups in transformation mode display
-- 154238e: MCP tools now configurable per mode instead of globally per provider
-- 9474ff7: Prefer Claude Code CLI binaries when auto-detecting providers (#000)
-- eab07f2: Gate LLM UI behind developer flag
 
 ## 0.5.13
 
@@ -78,7 +86,7 @@
 
 - a1eb1d0: Restore hotkeys when Input Monitoring permission is missing (#122, #124)
 - 1ee452a: Add non-interactive changeset creation for AI agents
-- 68475f5: Fix clipboard restore timing for slow apps – increased delay from 100ms to 500ms to prevent paste failures in apps that read clipboard asynchronously (e.g., Claude, Warp)
+- 68475f5: Fix clipboard restore timing for slow apps – increased delay from 100ms to 500ms to prevent paste failures in apps that read clipboard asynchronously
 
 ## 0.5.5
 

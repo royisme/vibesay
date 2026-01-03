@@ -10,24 +10,60 @@ import SwiftUI
 
 struct TranscriptionIndicatorView: View {
   @ObserveInjection var inject
-  
+
   enum Status {
     case hidden
     case optionKeyPressed
     case recording
     case transcribing
-    case postProcessing
     case prewarming
   }
 
   var status: Status
   var meter: Meter
 
+  let transcribeBaseColor: Color = .blue
+  private var backgroundColor: Color {
+    switch status {
+    case .hidden: return Color.clear
+    case .optionKeyPressed: return Color.black
+    case .recording: return .red.mix(with: .black, by: 0.5).mix(with: .red, by: meter.averagePower * 3)
+    case .transcribing: return transcribeBaseColor.mix(with: .black, by: 0.5)
+    case .prewarming: return transcribeBaseColor.mix(with: .black, by: 0.5)
+    }
+  }
+
+  private var strokeColor: Color {
+    switch status {
+    case .hidden: return Color.clear
+    case .optionKeyPressed: return Color.black
+    case .recording: return Color.red.mix(with: .white, by: 0.1).opacity(0.6)
+    case .transcribing: return transcribeBaseColor.mix(with: .white, by: 0.1).opacity(0.6)
+    case .prewarming: return transcribeBaseColor.mix(with: .white, by: 0.1).opacity(0.6)
+    }
+  }
+
+  private var innerShadowColor: Color {
+    switch status {
+    case .hidden: return Color.clear
+    case .optionKeyPressed: return Color.clear
+    case .recording: return Color.red
+    case .transcribing: return transcribeBaseColor
+    case .prewarming: return transcribeBaseColor
+    }
+  }
+
+  private let cornerRadius: CGFloat = 8
+  private let baseWidth: CGFloat = 16
+  private let expandedWidth: CGFloat = 56
+
   private var isHidden: Bool {
     status == .hidden
   }
 
   @State private var phase: CGFloat = 0
+
+  @State private var transcribeEffect: Int = 0
 
   var body: some View {
     ZStack {

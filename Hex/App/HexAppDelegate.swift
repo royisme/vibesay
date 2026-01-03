@@ -11,6 +11,7 @@ class HexAppDelegate: NSObject, NSApplicationDelegate {
 	var statusItem: NSStatusItem!
 
 	@Dependency(\.soundEffects) var soundEffect
+	@Dependency(\.recording) var recording
 	@Shared(.hexSettings) var hexSettings: HexSettings
 
 	func applicationDidFinishLaunching(_: Notification) {
@@ -34,7 +35,7 @@ class HexAppDelegate: NSObject, NSApplicationDelegate {
 		NotificationCenter.default.addObserver(
 			self,
 			selector: #selector(handleAppModeUpdate),
-			name: NSNotification.Name("UpdateAppMode"),
+			name: .updateAppMode,
 			object: nil
 		)
 
@@ -126,5 +127,11 @@ class HexAppDelegate: NSObject, NSApplicationDelegate {
 	func applicationShouldHandleReopen(_: NSApplication, hasVisibleWindows _: Bool) -> Bool {
 		presentSettingsView()
 		return true
+	}
+
+	func applicationWillTerminate(_: Notification) {
+		Task {
+			await recording.cleanup()
+		}
 	}
 }

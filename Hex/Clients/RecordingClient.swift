@@ -30,7 +30,9 @@ struct RecordingClient {
   var requestMicrophoneAccess: @Sendable () async -> Bool = { false }
   var observeAudioLevel: @Sendable () async -> AsyncStream<Meter> = { AsyncStream { _ in } }
   var getAvailableInputDevices: @Sendable () async -> [AudioInputDevice] = { [] }
+  var getDefaultInputDeviceName: @Sendable () async -> String? = { nil }
   var warmUpRecorder: @Sendable () async -> Void = {}
+  var cleanup: @Sendable () async -> Void = {}
 }
 
 extension RecordingClient: DependencyKey {
@@ -42,7 +44,9 @@ extension RecordingClient: DependencyKey {
       requestMicrophoneAccess: { await live.requestMicrophoneAccess() },
       observeAudioLevel: { await live.observeAudioLevel() },
       getAvailableInputDevices: { await live.getAvailableInputDevices() },
-      warmUpRecorder: { await live.warmUpRecorder() }
+      getDefaultInputDeviceName: { await live.getDefaultInputDeviceName() },
+      warmUpRecorder: { await live.warmUpRecorder() },
+      cleanup: { await live.cleanup() }
     )
   }
 }
@@ -305,6 +309,9 @@ actor RecordingClientLive {
   private var recorder: AVAudioRecorder?
   private let recordingURL = FileManager.default.temporaryDirectory.appendingPathComponent("recording.wav")
   private var isRecorderPrimedForNextSession = false
+  private var lastPrimedDeviceID: AudioDeviceID?
+  private var recordingSessionID: UUID?
+  private var mediaControlTask: Task<Void, Never>?
   private let recorderSettings: [String: Any] = [
     AVFormatIDKey: Int(kAudioFormatLinearPCM),
     AVSampleRateKey: 16000.0,
@@ -370,17 +377,39 @@ actor RecordingClientLive {
     
     return inputDevices
   }
+
+  /// Gets the current system default input device name
+  func getDefaultInputDeviceName() async -> String? {
+    guard let deviceID = getDefaultInputDevice() else { return nil }
+    if let cached = deviceCache[deviceID], cached.hasInput, let name = cached.name {
+      return name
+    }
+    let name = getDeviceName(deviceID: deviceID)
+    if let name {
+      deviceCache[deviceID] = (hasInput: true, name: name)
+    }
+    return name
+  }
   
   // MARK: - Core Audio Helpers
-  
+
+  /// Creates an AudioObjectPropertyAddress with common defaults.
+  private func audioPropertyAddress(
+    _ selector: AudioObjectPropertySelector,
+    scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal,
+    element: AudioObjectPropertyElement = kAudioObjectPropertyElementMain
+  ) -> AudioObjectPropertyAddress {
+    AudioObjectPropertyAddress(
+      mSelector: selector,
+      mScope: scope,
+      mElement: element
+    )
+  }
+
   /// Get all available audio devices
   private func getAllAudioDevices() -> [AudioDeviceID] {
     var propertySize: UInt32 = 0
-    var address = AudioObjectPropertyAddress(
-      mSelector: kAudioHardwarePropertyDevices,
-      mScope: kAudioObjectPropertyScopeGlobal,
-      mElement: kAudioObjectPropertyElementMain
-    )
+    var address = audioPropertyAddress(kAudioHardwarePropertyDevices)
     
     // Get the property data size
     var status = AudioObjectGetPropertyDataSize(
@@ -420,11 +449,7 @@ actor RecordingClientLive {
   
   /// Get device name for the given device ID
   private func getDeviceName(deviceID: AudioDeviceID) -> String? {
-    var address = AudioObjectPropertyAddress(
-      mSelector: kAudioDevicePropertyDeviceNameCFString,
-      mScope: kAudioObjectPropertyScopeGlobal,
-      mElement: kAudioObjectPropertyElementMain
-    )
+    var address = audioPropertyAddress(kAudioDevicePropertyDeviceNameCFString)
     
     var deviceName: CFString? = nil
     var size = UInt32(MemoryLayout<CFString?>.size)
@@ -454,11 +479,7 @@ actor RecordingClientLive {
   
   /// Check if device has input capabilities
   private func deviceHasInput(deviceID: AudioDeviceID) -> Bool {
-    var address = AudioObjectPropertyAddress(
-      mSelector: kAudioDevicePropertyStreamConfiguration,
-      mScope: kAudioDevicePropertyScopeInput,
-      mElement: kAudioObjectPropertyElementMain
-    )
+    var address = audioPropertyAddress(kAudioDevicePropertyStreamConfiguration, scope: kAudioDevicePropertyScopeInput)
     
     var propertySize: UInt32 = 0
     let status = AudioObjectGetPropertyDataSize(
@@ -498,11 +519,7 @@ actor RecordingClientLive {
   private func setInputDevice(deviceID: AudioDeviceID) {
     var device = deviceID
     let size = UInt32(MemoryLayout<AudioDeviceID>.size)
-    var address = AudioObjectPropertyAddress(
-      mSelector: kAudioHardwarePropertyDefaultInputDevice,
-      mScope: kAudioObjectPropertyScopeGlobal,
-      mElement: kAudioObjectPropertyElementMain
-    )
+    var address = audioPropertyAddress(kAudioHardwarePropertyDefaultInputDevice)
     
     let status = AudioObjectSetPropertyData(
       AudioObjectID(kAudioObjectSystemObject),
@@ -522,6 +539,85 @@ actor RecordingClientLive {
 
   func requestMicrophoneAccess() async -> Bool {
     await AVCaptureDevice.requestAccess(for: .audio)
+  }
+
+  // MARK: - Input Device Query
+
+  /// Gets the current default input device ID
+  private func getDefaultInputDevice() -> AudioDeviceID? {
+    var deviceID = AudioDeviceID(0)
+    var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+    var address = audioPropertyAddress(kAudioHardwarePropertyDefaultInputDevice)
+
+    let status = AudioObjectGetPropertyData(
+      AudioObjectID(kAudioObjectSystemObject),
+      &address,
+      0,
+      nil,
+      &size,
+      &deviceID
+    )
+
+    if status != 0 {
+      recordingLogger.error("Failed to get default input device: \(status)")
+      return nil
+    }
+
+    return deviceID
+  }
+
+  // MARK: - Input Device Mute Detection & Fix
+
+  /// Checks if the input device is muted at the Core Audio device level
+  private func isInputDeviceMuted(_ deviceID: AudioDeviceID) -> Bool {
+    var address = audioPropertyAddress(kAudioDevicePropertyMute, scope: kAudioDevicePropertyScopeInput)
+    var muted: UInt32 = 0
+    var size = UInt32(MemoryLayout<UInt32>.size)
+
+    let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &muted)
+    if status != noErr {
+      // Property not supported on this device
+      return false
+    }
+    return muted == 1
+  }
+
+  /// Unmutes the input device at the Core Audio device level
+  private func unmuteInputDevice(_ deviceID: AudioDeviceID) {
+    var address = audioPropertyAddress(kAudioDevicePropertyMute, scope: kAudioDevicePropertyScopeInput)
+    var muted: UInt32 = 0
+    let size = UInt32(MemoryLayout<UInt32>.size)
+
+    let status = AudioObjectSetPropertyData(deviceID, &address, 0, nil, size, &muted)
+    if status == noErr {
+      recordingLogger.warning("Input device \(deviceID) was muted at device level - automatically unmuted")
+    } else {
+      recordingLogger.error("Failed to unmute input device \(deviceID): \(status)")
+    }
+  }
+
+  /// Checks and fixes muted input device before recording
+  private func ensureInputDeviceUnmuted() {
+    // Check the selected device if specified, otherwise the default
+    var deviceIDsToCheck: [AudioDeviceID] = []
+
+    if let selectedIDString = hexSettings.selectedMicrophoneID,
+       let selectedID = AudioDeviceID(selectedIDString) {
+      deviceIDsToCheck.append(selectedID)
+    }
+
+    if let defaultID = getDefaultInputDevice() {
+      if !deviceIDsToCheck.contains(defaultID) {
+        deviceIDsToCheck.append(defaultID)
+      }
+    }
+
+    for deviceID in deviceIDsToCheck {
+      if isInputDeviceMuted(deviceID) {
+        recordingLogger.error("⚠️ Input device \(deviceID) is MUTED at Core Audio level! This causes silent recordings.")
+        unmuteInputDevice(deviceID)
+      }
+    }
   }
 
   // MARK: - Volume Control
@@ -544,11 +640,7 @@ actor RecordingClientLive {
   private func getDefaultOutputDevice() -> AudioDeviceID? {
     var deviceID = AudioDeviceID(0)
     var size = UInt32(MemoryLayout<AudioDeviceID>.size)
-    var address = AudioObjectPropertyAddress(
-      mSelector: kAudioHardwarePropertyDefaultOutputDevice,
-      mScope: kAudioObjectPropertyScopeGlobal,
-      mElement: kAudioObjectPropertyElementMain
-    )
+    var address = audioPropertyAddress(kAudioHardwarePropertyDefaultOutputDevice)
 
     let status = AudioObjectGetPropertyData(
       AudioObjectID(kAudioObjectSystemObject),
@@ -575,11 +667,7 @@ actor RecordingClientLive {
 
     var volume: Float32 = 0.0
     var size = UInt32(MemoryLayout<Float32>.size)
-    var address = AudioObjectPropertyAddress(
-      mSelector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
-      mScope: kAudioDevicePropertyScopeOutput,
-      mElement: kAudioObjectPropertyElementMain
-    )
+    var address = audioPropertyAddress(kAudioHardwareServiceDeviceProperty_VirtualMainVolume, scope: kAudioDevicePropertyScopeOutput)
 
     let status = AudioObjectGetPropertyData(
       deviceID,
@@ -606,11 +694,7 @@ actor RecordingClientLive {
 
     var newVolume = volume
     let size = UInt32(MemoryLayout<Float32>.size)
-    var address = AudioObjectPropertyAddress(
-      mSelector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
-      mScope: kAudioDevicePropertyScopeOutput,
-      mElement: kAudioObjectPropertyElementMain
-    )
+    var address = audioPropertyAddress(kAudioHardwareServiceDeviceProperty_VirtualMainVolume, scope: kAudioDevicePropertyScopeOutput)
 
     let status = AudioObjectSetPropertyData(
       deviceID,
@@ -627,27 +711,37 @@ actor RecordingClientLive {
   }
 
   func startRecording() async {
+    // Check and fix device-level mute before recording
+    ensureInputDeviceUnmuted()
+
+    let sessionID = UUID()
+    recordingSessionID = sessionID
+    mediaControlTask?.cancel()
+    mediaControlTask = nil
+
     // Handle audio behavior based on user preference
     switch hexSettings.recordingAudioBehavior {
     case .pauseMedia:
       // Pause media in background - don't block recording from starting
-      Task {
-        if await self.pauseUsingMediaRemoteIfPossible() {
+      mediaControlTask = Task { [sessionID] in
+        guard await self.isCurrentSession(sessionID) else { return }
+        if await self.pauseUsingMediaRemoteIfPossible(sessionID: sessionID) {
           return
         }
 
         // First, pause all media applications using their AppleScript interface.
         let paused = await pauseAllMediaApplications()
-        self.updatePausedPlayers(paused)
+        await self.updatePausedPlayers(paused, sessionID: sessionID)
 
         // If no specific players were paused, pause generic media using the media key.
+        guard await self.isCurrentSession(sessionID) else { return }
         if paused.isEmpty {
           if await isAudioPlayingOnDefaultOutput() {
             mediaLogger.notice("Detected active audio on default output; sending media pause")
             await MainActor.run {
               sendMediaKey()
             }
-            self.setDidPauseMedia(true)
+            await self.setDidPauseMedia(true, sessionID: sessionID)
             mediaLogger.notice("Paused media via media key fallback")
           }
         } else {
@@ -657,9 +751,10 @@ actor RecordingClientLive {
 
     case .mute:
       // Mute system volume in background
-      Task {
+      mediaControlTask = Task { [sessionID] in
+        guard await self.isCurrentSession(sessionID) else { return }
         let volume = await self.muteSystemVolume()
-        self.setPreviousVolume(volume)
+        await self.setPreviousVolume(volume, sessionID: sessionID)
       }
 
     case .doNothing:
@@ -667,32 +762,55 @@ actor RecordingClientLive {
       break
     }
 
-    // If user has selected a specific microphone, verify it exists and set it as the default input device
-    if let selectedDeviceIDString = hexSettings.selectedMicrophoneID,
-       let selectedDeviceID = AudioDeviceID(selectedDeviceIDString) {
-      // Check if the selected device is still available
-      let devices = getAllAudioDevices()
-      if devices.contains(selectedDeviceID) && deviceHasInput(deviceID: selectedDeviceID) {
-        recordingLogger.debug("Setting selected input device to \(selectedDeviceID)")
-        setInputDevice(deviceID: selectedDeviceID)
+    // Determine target input device (custom selection or system default)
+    let targetDeviceID: AudioDeviceID? = {
+      if let selectedDeviceIDString = hexSettings.selectedMicrophoneID,
+         let selectedDeviceID = AudioDeviceID(selectedDeviceIDString) {
+        // Verify the selected device is still available
+        let devices = getAllAudioDevices()
+        if devices.contains(selectedDeviceID) && deviceHasInput(deviceID: selectedDeviceID) {
+          return selectedDeviceID
+        } else {
+          recordingLogger.notice("Selected device \(selectedDeviceID) missing; using system default")
+          return nil
+        }
+      }
+      return nil  // Use system default
+    }()
+
+    // Get current default input device
+    let currentDefaultDevice = getDefaultInputDevice()
+    if let primedDevice = lastPrimedDeviceID, primedDevice != currentDefaultDevice {
+      recordingLogger.notice("Default input changed from \(primedDevice) to \(currentDefaultDevice ?? 0); invalidating primed state")
+      invalidatePrimedState()
+    }
+
+    // Only change device if target differs from current default
+    if let target = targetDeviceID {
+      if target != currentDefaultDevice {
+        recordingLogger.notice("Switching input device from \(currentDefaultDevice ?? 0) to \(target)")
+        setInputDevice(deviceID: target)
+        // Invalidate primed state since device changed - recorder was prepared for old device
+        invalidatePrimedState()
       } else {
-        // Device no longer available, fall back to system default
-        recordingLogger.notice("Selected device \(selectedDeviceID) missing; using system default")
+        recordingLogger.debug("Device \(target) already set as default, skipping setInputDevice()")
       }
     } else {
-      recordingLogger.debug("Using default system microphone")
+      recordingLogger.debug("Using system default microphone")
     }
 
     do {
       let recorder = try ensureRecorderReadyForRecording()
       guard recorder.record() else {
         recordingLogger.error("AVAudioRecorder refused to start recording")
+        endRecordingSession()
         return
       }
       startMeterTask()
       recordingLogger.notice("Recording started")
     } catch {
       recordingLogger.error("Failed to start recording: \(error.localizedDescription)")
+      endRecordingSession()
     }
   }
 
@@ -700,6 +818,7 @@ actor RecordingClientLive {
     let wasRecording = recorder?.isRecording == true
     recorder?.stop()
     stopMeterTask()
+    endRecordingSession()
     if wasRecording {
       recordingLogger.notice("Recording stopped")
     } else {
@@ -769,19 +888,38 @@ actor RecordingClientLive {
   }
 
   // Actor state update helpers
-  private func updatePausedPlayers(_ players: [String]) {
+  private func isCurrentSession(_ sessionID: UUID) -> Bool {
+    recordingSessionID == sessionID
+  }
+
+  private func endRecordingSession() {
+    recordingSessionID = nil
+    mediaControlTask?.cancel()
+    mediaControlTask = nil
+  }
+
+  private func invalidatePrimedState() {
+    isRecorderPrimedForNextSession = false
+    lastPrimedDeviceID = nil
+  }
+
+  private func updatePausedPlayers(_ players: [String], sessionID: UUID) {
+    guard recordingSessionID == sessionID else { return }
     pausedPlayers = players
   }
 
-  private func setDidPauseMedia(_ value: Bool) {
+  private func setDidPauseMedia(_ value: Bool, sessionID: UUID) {
+    guard recordingSessionID == sessionID else { return }
     didPauseMedia = value
   }
 
-  private func setDidPauseViaMediaRemote(_ value: Bool) {
+  private func setDidPauseViaMediaRemote(_ value: Bool, sessionID: UUID) {
+    guard recordingSessionID == sessionID else { return }
     didPauseViaMediaRemote = value
   }
 
-  private func setPreviousVolume(_ volume: Float) {
+  private func setPreviousVolume(_ volume: Float, sessionID: UUID) {
+    guard recordingSessionID == sessionID else { return }
     previousVolume = volume
   }
 
@@ -793,7 +931,7 @@ actor RecordingClientLive {
   }
 
   @discardableResult
-  private func pauseUsingMediaRemoteIfPossible() async -> Bool {
+  private func pauseUsingMediaRemoteIfPossible(sessionID: UUID) async -> Bool {
     guard let controller = mediaRemoteController else {
       return false
     }
@@ -808,7 +946,7 @@ actor RecordingClientLive {
       return false
     }
 
-    setDidPauseViaMediaRemote(true)
+    setDidPauseViaMediaRemote(true, sessionID: sessionID)
     mediaLogger.notice("Paused media via MediaRemote")
     return true
   }
@@ -868,11 +1006,13 @@ actor RecordingClientLive {
     let recorder = try recorderOrCreate()
     guard recorder.prepareToRecord() else {
       isRecorderPrimedForNextSession = false
+      lastPrimedDeviceID = nil
       throw RecorderPreparationError.failedToPrepareRecorder
     }
 
     isRecorderPrimedForNextSession = true
-    recordingLogger.debug("Recorder primed for next session")
+    lastPrimedDeviceID = getDefaultInputDevice()
+    recordingLogger.debug("Recorder primed for device \(self.lastPrimedDeviceID ?? 0)")
   }
 
   func startMeterTask() {
@@ -904,6 +1044,20 @@ actor RecordingClientLive {
     } catch {
       recordingLogger.error("Failed to warm up recorder: \(error.localizedDescription)")
     }
+  }
+
+  /// Release recorder resources. Call on app termination.
+  func cleanup() {
+    endRecordingSession()
+    if let recorder = recorder {
+      if recorder.isRecording {
+        recorder.stop()
+      }
+      self.recorder = nil
+    }
+    isRecorderPrimedForNextSession = false
+    lastPrimedDeviceID = nil
+    recordingLogger.notice("RecordingClient cleaned up")
   }
 }
 
