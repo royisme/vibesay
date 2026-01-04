@@ -11,7 +11,7 @@ let package = Package(
         .package(url: "https://github.com/Clipy/Sauce", branch: "master"),
         .package(url: "https://github.com/pointfreeco/swift-dependencies", from: "1.0.0"),
         .package(url: "https://github.com/apple/swift-log", from: "1.6.4"),
-        .package(url: "https://github.com/k2-fsa/sherpa-onnx", from: "1.10.0"),
+        // .package(url: "https://github.com/k2-fsa/sherpa-onnx", from: "1.10.0"), // Not a valid SPM package
         .package(url: "https://github.com/argmaxinc/WhisperKit", branch: "main"),
         .package(url: "https://github.com/FluidInference/FluidAudio", branch: "main"),
     ],
@@ -23,7 +23,7 @@ let package = Package(
                 .product(name: "Dependencies", package: "swift-dependencies"),
                 .product(name: "DependenciesMacros", package: "swift-dependencies"),
                 .product(name: "Logging", package: "swift-log"),
-                .product(name: "SherpaOnnx", package: "sherpa-onnx"),
+                // .product(name: "SherpaOnnx", package: "sherpa-onnx"), // Not a valid SPM package
                 .product(name: "WhisperKit", package: "WhisperKit"),
                 .product(name: "FluidAudio", package: "FluidAudio"),
             ],

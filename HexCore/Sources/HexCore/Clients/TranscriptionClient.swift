@@ -4,7 +4,7 @@ import DependenciesMacros
 import Foundation
 import Logging
 import WhisperKit
-import SherpaOnnx
+// import SherpaOnnx // Not a valid SPM package
 
 #if canImport(FluidAudio)
 import FluidAudio
@@ -49,7 +49,7 @@ public actor TranscriptionClientLive {
   private var whisperKit: WhisperKit?
   private var currentModelName: String?
   private var parakeet: ParakeetClient = ParakeetClient()
-  private var senseVoice: SenseVoiceClient = SenseVoiceClient()
+  // private var senseVoice: SenseVoiceClient = SenseVoiceClient() // Disabled: SherpaOnnx not available via SPM
 
   @Dependency(\.huggingFace) var huggingFace
 
@@ -82,10 +82,12 @@ public actor TranscriptionClientLive {
     }
 
     if isSenseVoice(variant) {
-        try await downloadModelIfNeeded(variant: variant, progressCallback: progressCallback)
-        try await senseVoice.ensureLoaded(modelPath: modelPath(for: variant).path)
-        currentModelName = variant
-        return
+        // Disabled: SherpaOnnx not available via SPM
+        throw NSError(domain: "TranscriptionClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "SenseVoice is not available (SherpaOnnx not included)"])
+        // try await downloadModelIfNeeded(variant: variant, progressCallback: progressCallback)
+        // try await senseVoice.ensureLoaded(modelPath: modelPath(for: variant).path)
+        // currentModelName = variant
+        // return
     }
 
     // Resolve wildcard patterns or use direct name
@@ -139,7 +141,8 @@ public actor TranscriptionClientLive {
       return await parakeet.isModelAvailable(modelName)
     }
     if isSenseVoice(modelName) {
-        return await senseVoice.isModelAvailable(modelPath(for: modelName).path)
+        return false // Disabled: SherpaOnnx not available via SPM
+        // return await senseVoice.isModelAvailable(modelPath(for: modelName).path)
     }
 
     let modelFolderPath = modelPath(for: modelName).path
@@ -193,11 +196,13 @@ public actor TranscriptionClientLive {
     }
 
     if isSenseVoice(model) {
-        transcriptionLogger.notice("Transcribing with SenseVoice model=\(model)")
-        try await downloadAndLoadModel(variant: model) { p in progressCallback(p) }
-        let text = try await senseVoice.transcribe(audioURL: url)
-        transcriptionLogger.info("SenseVoice transcription finished")
-        return text
+        // Disabled: SherpaOnnx not available via SPM
+        throw NSError(domain: "TranscriptionClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "SenseVoice is not available (SherpaOnnx not included)"])
+        // transcriptionLogger.notice("Transcribing with SenseVoice model=\(model)")
+        // try await downloadAndLoadModel(variant: model) { p in progressCallback(p) }
+        // let text = try await senseVoice.transcribe(audioURL: url)
+        // transcriptionLogger.info("SenseVoice transcription finished")
+        // return text
     }
 
     let model = await resolveVariant(model)
