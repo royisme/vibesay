@@ -21,3 +21,5 @@ node_modules/
 
 # Claude
 .claude/
+.works
+HexCore/.swiftpm/
